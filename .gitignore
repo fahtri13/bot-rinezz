@@ -1,0 +1,18 @@
+# Kredensial & Lingkungan Sensitif (JANGAN DI-UPLOAD KE GITHUB)
+.env
+session/
+*.session
+auth_info_baileys/
+
+# Dependensi Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database & File Runtime
+database/players.json
+
+# Sistem Operasi
+.DS_Store
+Thumbs.db

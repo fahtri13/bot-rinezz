@@ -1,0 +1,18 @@
+{
+  "name": "bot-rinezz",
+  "version": "1.0.0",
+  "description": "WhatsApp AI Bot rinezz with 9router and RPG game system",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "dotenv": "^18.0.5",
+    "openai": "^7.27.0",
+    "pino": "^10.4.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "author": "rinezzero",
+  "license": "ISC"
+}
