@@ -21,6 +21,17 @@ const rl = readline.createInterface({
 
 const question = (query) => new Promise((resolve) => rl.question(query, resolve));
 
+// Set untuk mencatat pesan yang dikirim oleh bot sendiri agar tidak terjadi looping
+const sentMessageIds = new Set();
+function markSentMessage(id) {
+  if (!id) return;
+  sentMessageIds.add(id);
+  if (sentMessageIds.size > 2000) {
+    const firstKey = sentMessageIds.values().next().value;
+    sentMessageIds.delete(firstKey);
+  }
+}
+
 // Ekstrak teks pesan dari berbagai jenis pesan WhatsApp
 function extractMessageText(msg) {
   if (!msg.message) return '';
@@ -75,6 +86,16 @@ async function startWhatsAppBot() {
     generateHighQualityLinkPreview: true,
     browser: ['Ubuntu', 'Chrome', '20.0.04']
   });
+
+  // Intercept sendMessage agar semua pesan yang dikirim oleh script bot tercatat ID-nya (mencegah loop)
+  const rawSendMessage = sock.sendMessage.bind(sock);
+  sock.sendMessage = async (...args) => {
+    const result = await rawSendMessage(...args);
+    if (result?.key?.id) {
+      markSentMessage(result.key.id);
+    }
+    return result;
+  };
 
   // Metode Pairing Code (jika diaktifkan)
   if (config.usePairingCode && !sock.authState.creds.registered) {
@@ -146,21 +167,34 @@ async function startWhatsAppBot() {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
+      if (!msg.message) continue;
+
+      // Abaikan jika pesan ini dihasilkan otomatis oleh bot sendiri (mencegah loop)
+      if (sentMessageIds.has(msg.key.id)) continue;
 
       const remoteJid = msg.key.remoteJid;
       const isGroup = remoteJid.endsWith('@g.us');
-      const senderJid = isGroup
-        ? (msg.key.participant || msg.participant || remoteJid)
-        : remoteJid;
-      const pushName = msg.pushName || 'Kawan';
+      const botJid = sock.user?.id || '';
+      const botNumber = botJid.split(':')[0].split('@')[0];
+      const remoteNumber = remoteJid.split(':')[0].split('@')[0];
+      const isSelfChat = remoteNumber === botNumber;
+      const isFromMe = Boolean(msg.key.fromMe);
+
+      // Tentukan senderJid
+      let senderJid = remoteJid;
+      if (isGroup) {
+        senderJid = msg.key.participant || msg.participant || (isFromMe ? `${botNumber}@s.whatsapp.net` : remoteJid);
+      } else if (isFromMe) {
+        senderJid = `${botNumber}@s.whatsapp.net`;
+      }
+
+      const pushName = (isFromMe ? config.ownerName : msg.pushName) || 'Kawan';
 
       const rawText = extractMessageText(msg);
       if (!rawText.trim()) continue;
 
-      const botJid = sock.user?.id || '';
-
       // 1. Eksekusi Command (jika diawali prefix '/')
+      // Bisa digunakan oleh siapa saja, TERMASUK oleh pemilik bot sendiri (fromMe)
       if (rawText.trim().startsWith(config.prefix)) {
         try {
           const handled = await handleCommand({
@@ -183,19 +217,24 @@ async function startWhatsAppBot() {
       let isAiTriggered = false;
       let cleanQuery = rawText;
 
-      if (!isGroup) {
-        // Di chat pribadi (DM), langsung balas dengan AI jika bukan command
+      if (isSelfChat) {
+        // Di chat pribadi ke nomor sendiri (Message Yourself):
+        // Bebas mengetik apa saja untuk mengobrol dengan AI rinezz
         isAiTriggered = true;
+      } else if (!isGroup) {
+        // Di chat pribadi dengan orang lain:
+        // Jika orang lain yang kirim pesan, bot membalas.
+        // Jika pemilik bot yang sedang chat ke orang lain, bot TIDAK ikut campur.
+        if (!isFromMe) {
+          isAiTriggered = true;
+        }
       } else {
         // Di grup WhatsApp:
-        // Trigger jika mention bot (@rinezz)
+        // Trigger jika mention bot (@rinezz) atau reply ke bot
         if (isMentioningBot(msg, botJid)) {
           isAiTriggered = true;
-          // Hapus tag mention dari teks
           cleanQuery = rawText.replace(/@\d+/g, '').trim();
-        }
-        // Atau trigger jika reply ke pesan bot
-        else if (isReplyingToBot(msg, botJid)) {
+        } else if (isReplyingToBot(msg, botJid)) {
           isAiTriggered = true;
         }
       }
@@ -203,9 +242,7 @@ async function startWhatsAppBot() {
       // 3. Respon AI 9router (kr/auto)
       if (isAiTriggered && cleanQuery.trim().length > 0) {
         try {
-          // Beri tanda bahwa bot sedang mengetik (composing)
           await sock.sendPresenceUpdate('composing', remoteJid);
-
           const aiReply = await ai.askAI(senderJid, cleanQuery.trim());
           await sock.sendMessage(remoteJid, { text: aiReply }, { quoted: msg });
         } catch (err) {
